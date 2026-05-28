@@ -8,6 +8,7 @@ const {
   jsonb,
 } = require("drizzle-orm/pg-core");
 const { users } = require("./users");
+const { ecosystems } = require("./ecosystems");
 
 const conservationProjects = pgTable("conservation_projects", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -26,8 +27,9 @@ const conservationProjects = pgTable("conservation_projects", {
 
   status: varchar("status", { length: 20 }).default("ongoing"),
 
-  fundingGoal: numeric("funding_goal"),
-  amountRaised: numeric("amount_raised").default("0"),
+  fundingGoal: numeric("funding_goal", { precision: 12, scale: 2 }),
+  amountRaised: numeric("amount_raised", { precision: 12, scale: 2 }),
+  ecosystemId: uuid("ecosystem_id").references(() => ecosystems.id),
 
   gallery: text("gallery").array(),
 

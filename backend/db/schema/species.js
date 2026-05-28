@@ -7,6 +7,7 @@ const {
   timestamp,
 } = require("drizzle-orm/pg-core");
 const { users } = require("./users");
+const { ecosystems } = require("./ecosystems");
 
 const species = pgTable("species", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -17,10 +18,12 @@ const species = pgTable("species", {
 
   habitat: text("habitat"),
   conservationStatus: varchar("conservation_status", { length: 50 }),
-
+  imageUrl: text("image_url"),
+  threatLevel: varchar("threat_level", { length: 50 }),
   verified: boolean("verified").default(false),
 
   discoveredBy: uuid("discovered_by").references(() => users.id),
+  ecosystemId: uuid("ecosystem_id").references(() => ecosystems.id),
 
   createdAt: timestamp("created_at").defaultNow(),
 });

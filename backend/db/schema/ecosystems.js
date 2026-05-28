@@ -13,6 +13,7 @@ const ecosystems = pgTable("ecosystems", {
   description: text("description"),
 
   threats: text("threats").array(),
+  zoneType: varchar("zone_type", { length: 50 }),
 
   imageUrl: text("image_url"),
 
