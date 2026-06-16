@@ -8,7 +8,7 @@ const {
   jsonb,
 } = require("drizzle-orm/pg-core");
 const { users } = require("./users");
-const { ecosystems } = require("./ecosystems");
+const { ecosystems } = require("../db/schema/ecosystems");
 
 const conservationProjects = pgTable("conservation_projects", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -35,7 +35,6 @@ const conservationProjects = pgTable("conservation_projects", {
 
   progressUpdates: jsonb("progress_updates"),
 
-  volunteers: text("volunteers").array(),
 
   createdBy: uuid("created_by").references(() => users.id),
 

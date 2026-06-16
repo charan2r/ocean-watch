@@ -1,47 +1,33 @@
-import { Navigation } from "@/components/navigation";
-import { Footer } from "@/components/footer";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import Link from "next/link";
-import {
-  ArrowLeft,
-  Fish,
-  Thermometer,
-  Waves,
-  AlertTriangle,
-  Shield,
-  MapPin,
-} from "lucide-react";
+import { Navigation } from "@/components/navigation"
+import { Footer } from "@/components/footer"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import Link from "next/link"
+import { ArrowLeft, Fish, Thermometer, Waves, AlertTriangle, Shield, MapPin } from "lucide-react"
 
-const ecosystemsData: Record<
-  string,
-  {
-    id: string;
-    name: string;
-    description: string;
-    longDescription: string;
-    image: string;
-    speciesCount: number;
-    temperature: string;
-    depth: string;
-    threats: string[];
-    status: string;
-    coverage: string;
-    keySpecies: Array<{ name: string; image: string; id: number }>;
-    conservationEfforts: string[];
-    locations: string[];
-  }
-> = {
+const ecosystemsData: Record<string, {
+  id: string
+  name: string
+  description: string
+  longDescription: string
+  image: string
+  speciesCount: number
+  temperature: string
+  depth: string
+  threats: string[]
+  status: string
+  coverage: string
+  keySpecies: Array<{ name: string; image: string; id: number }>
+  conservationEfforts: string[]
+  locations: string[]
+}> = {
   "coral-reefs": {
     id: "coral-reefs",
     name: "Coral Reefs",
-    description:
-      "Often called the rainforests of the sea, coral reefs are among the most biodiverse ecosystems on Earth.",
-    longDescription:
-      "Coral reefs are underwater ecosystems characterized by reef-building corals. Reefs are formed of colonies of coral polyps held together by calcium carbonate. Most coral reefs are built from stony corals, whose polyps cluster in groups. Coral belongs to the class Anthozoa in the animal phylum Cnidaria, which includes sea anemones and jellyfish. Unlike sea anemones, corals secrete hard carbonate exoskeletons that support and protect the coral. Most reefs grow best in warm, shallow, clear, sunny and agitated water. Often called rainforests of the sea, shallow coral reefs form some of Earth&apos;s most diverse ecosystems. They occupy less than 0.1% of the world&apos;s ocean area, about half the area of France, yet they provide a home for at least 25% of all marine species.",
-    image:
-      "https://images.unsplash.com/photo-1546026423-cc4642628d2b?w=1200&h=600&fit=crop",
+    description: "Often called the rainforests of the sea, coral reefs are among the most biodiverse ecosystems on Earth.",
+    longDescription: "Coral reefs are underwater ecosystems characterized by reef-building corals. Reefs are formed of colonies of coral polyps held together by calcium carbonate. Most coral reefs are built from stony corals, whose polyps cluster in groups. Coral belongs to the class Anthozoa in the animal phylum Cnidaria, which includes sea anemones and jellyfish. Unlike sea anemones, corals secrete hard carbonate exoskeletons that support and protect the coral. Most reefs grow best in warm, shallow, clear, sunny and agitated water. Often called rainforests of the sea, shallow coral reefs form some of Earth&apos;s most diverse ecosystems. They occupy less than 0.1% of the world&apos;s ocean area, about half the area of France, yet they provide a home for at least 25% of all marine species.",
+    image: "https://images.unsplash.com/photo-1546026423-cc4642628d2b?w=1200&h=600&fit=crop",
     speciesCount: 4000,
     temperature: "23-29°C",
     depth: "0-50m",
@@ -56,24 +42,9 @@ const ecosystemsData: Record<
     status: "Endangered",
     coverage: "Less than 1% of ocean floor",
     keySpecies: [
-      {
-        name: "Clownfish",
-        image:
-          "https://images.unsplash.com/photo-1535591273668-578e31182c4f?w=200&h=200&fit=crop",
-        id: 4,
-      },
-      {
-        name: "Hawksbill Turtle",
-        image:
-          "https://images.unsplash.com/photo-1591025207163-942350e47db2?w=200&h=200&fit=crop",
-        id: 2,
-      },
-      {
-        name: "Manta Ray",
-        image:
-          "https://images.unsplash.com/photo-1544552866-d3ed42536cfd?w=200&h=200&fit=crop",
-        id: 3,
-      },
+      { name: "Clownfish", image: "https://images.unsplash.com/photo-1535591273668-578e31182c4f?w=200&h=200&fit=crop", id: 4 },
+      { name: "Hawksbill Turtle", image: "https://images.unsplash.com/photo-1591025207163-942350e47db2?w=200&h=200&fit=crop", id: 2 },
+      { name: "Manta Ray", image: "https://images.unsplash.com/photo-1544552866-d3ed42536cfd?w=200&h=200&fit=crop", id: 3 },
     ],
     conservationEfforts: [
       "Marine Protected Areas (MPAs) establishment",
@@ -82,24 +53,16 @@ const ecosystemsData: Record<
       "Reducing land-based pollution",
       "Climate change mitigation efforts",
     ],
-    locations: [
-      "Great Barrier Reef, Australia",
-      "Coral Triangle, Southeast Asia",
-      "Red Sea",
-      "Caribbean",
-      "Maldives",
-    ],
+    locations: ["Great Barrier Reef, Australia", "Coral Triangle, Southeast Asia", "Red Sea", "Caribbean", "Maldives"],
   },
-};
+}
 
 const defaultEcosystem = {
   id: "unknown",
   name: "Marine Ecosystem",
   description: "A diverse marine habitat supporting various species.",
-  longDescription:
-    "This ecosystem information is being compiled. Marine ecosystems are complex communities of organisms that interact with their physical environment. They range from coastal areas to the deep sea, each supporting unique species adapted to their specific conditions.",
-  image:
-    "https://images.unsplash.com/photo-1551244072-5d12893278ab?w=1200&h=600&fit=crop",
+  longDescription: "This ecosystem information is being compiled. Marine ecosystems are complex communities of organisms that interact with their physical environment. They range from coastal areas to the deep sea, each supporting unique species adapted to their specific conditions.",
+  image: "https://images.unsplash.com/photo-1551244072-5d12893278ab?w=1200&h=600&fit=crop",
   speciesCount: 1000,
   temperature: "Varies",
   depth: "Varies",
@@ -107,29 +70,22 @@ const defaultEcosystem = {
   status: "Unknown",
   coverage: "Data being collected",
   keySpecies: [],
-  conservationEfforts: [
-    "Research and monitoring",
-    "Protected area establishment",
-  ],
+  conservationEfforts: ["Research and monitoring", "Protected area establishment"],
   locations: ["Various locations worldwide"],
-};
+}
 
 const statusColors: Record<string, string> = {
-  Endangered: "bg-orange-500 text-white",
-  Vulnerable: "bg-yellow-500 text-black",
-  Declining: "bg-amber-400 text-black",
-  Threatened: "bg-red-400 text-white",
+  "Endangered": "bg-orange-500 text-white",
+  "Vulnerable": "bg-yellow-500 text-black",
+  "Declining": "bg-amber-400 text-black",
+  "Threatened": "bg-red-400 text-white",
   "Data Deficient": "bg-gray-500 text-white",
-  Unknown: "bg-gray-500 text-white",
-};
+  "Unknown": "bg-gray-500 text-white",
+}
 
-export default async function EcosystemDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  const ecosystem = ecosystemsData[id] || { ...defaultEcosystem, id };
+export default async function EcosystemDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const ecosystem = ecosystemsData[id] || { ...defaultEcosystem, id }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -144,12 +100,8 @@ export default async function EcosystemDetailPage({
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
           <div className="absolute inset-0 flex items-end">
-            <div className="w-full mx-auto px-4 md:px-6 pb-8">
-              <Button
-                variant="ghost"
-                className="mb-4 text-white hover:text-white hover:bg-white/20"
-                asChild
-              >
+            <div className="container px-4 md:px-6 pb-8">
+              <Button variant="ghost" className="mb-4 text-white hover:text-white hover:bg-white/20" asChild>
                 <Link href="/ecosystems">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Ecosystems
@@ -161,16 +113,14 @@ export default async function EcosystemDetailPage({
               <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
                 {ecosystem.name}
               </h1>
-              <p className="text-xl text-gray-300 mt-2 max-w-2xl">
-                {ecosystem.description}
-              </p>
+              <p className="text-xl text-gray-300 mt-2 max-w-2xl">{ecosystem.description}</p>
             </div>
           </div>
         </section>
 
         {/* Stats Bar */}
         <section className="bg-card border-b">
-          <div className="w-full mx-auto px-4 md:px-6 py-6">
+          <div className="container px-4 md:px-6 py-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
@@ -178,9 +128,7 @@ export default async function EcosystemDetailPage({
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Species</p>
-                  <p className="font-semibold">
-                    {ecosystem.speciesCount.toLocaleString()}+
-                  </p>
+                  <p className="font-semibold">{ecosystem.speciesCount.toLocaleString()}+</p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -216,7 +164,7 @@ export default async function EcosystemDetailPage({
 
         {/* Content */}
         <section className="py-12">
-          <div className="w-full mx-auto px-4 md:px-6">
+          <div className="container px-4 md:px-6">
             <div className="grid lg:grid-cols-3 gap-8">
               {/* Main Content */}
               <div className="lg:col-span-2 space-y-8">
@@ -225,9 +173,7 @@ export default async function EcosystemDetailPage({
                     <CardTitle>About This Ecosystem</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-muted-foreground leading-relaxed">
-                      {ecosystem.longDescription}
-                    </p>
+                    <p className="text-muted-foreground leading-relaxed">{ecosystem.longDescription}</p>
                   </CardContent>
                 </Card>
 
@@ -243,9 +189,7 @@ export default async function EcosystemDetailPage({
                       {ecosystem.threats.map((threat, index) => (
                         <li key={index} className="flex items-start gap-3">
                           <span className="h-2 w-2 rounded-full bg-destructive mt-2 flex-shrink-0" />
-                          <span className="text-muted-foreground">
-                            {threat}
-                          </span>
+                          <span className="text-muted-foreground">{threat}</span>
                         </li>
                       ))}
                     </ul>
@@ -264,9 +208,7 @@ export default async function EcosystemDetailPage({
                       {ecosystem.conservationEfforts.map((effort, index) => (
                         <li key={index} className="flex items-start gap-3">
                           <span className="h-2 w-2 rounded-full bg-green-500 mt-2 flex-shrink-0" />
-                          <span className="text-muted-foreground">
-                            {effort}
-                          </span>
+                          <span className="text-muted-foreground">{effort}</span>
                         </li>
                       ))}
                     </ul>
@@ -284,8 +226,8 @@ export default async function EcosystemDetailPage({
                     <CardContent>
                       <div className="space-y-3">
                         {ecosystem.keySpecies.map((species) => (
-                          <Link
-                            key={species.id}
+                          <Link 
+                            key={species.id} 
                             href={`/species/${species.id}`}
                             className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted transition-colors"
                           >
@@ -294,9 +236,7 @@ export default async function EcosystemDetailPage({
                               alt={species.name}
                               className="w-12 h-12 rounded-lg object-cover"
                             />
-                            <span className="font-medium text-sm">
-                              {species.name}
-                            </span>
+                            <span className="font-medium text-sm">{species.name}</span>
                           </Link>
                         ))}
                       </div>
@@ -316,10 +256,7 @@ export default async function EcosystemDetailPage({
                   <CardContent>
                     <ul className="space-y-2">
                       {ecosystem.locations.map((location, index) => (
-                        <li
-                          key={index}
-                          className="flex items-center gap-2 text-sm text-muted-foreground"
-                        >
+                        <li key={index} className="flex items-center gap-2 text-sm text-muted-foreground">
                           <MapPin className="h-4 w-4 text-primary" />
                           {location}
                         </li>
@@ -339,10 +276,14 @@ export default async function EcosystemDetailPage({
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <Button variant="outline" className="w-full" asChild>
-                      <Link href="/projects">Conservation Projects</Link>
+                      <Link href="/projects">
+                        Conservation Projects
+                      </Link>
                     </Button>
                     <Button variant="outline" className="w-full" asChild>
-                      <Link href="/observations/new">Submit Observation</Link>
+                      <Link href="/observations/new">
+                        Submit Observation
+                      </Link>
                     </Button>
                   </CardContent>
                 </Card>
@@ -353,5 +294,5 @@ export default async function EcosystemDetailPage({
       </main>
       <Footer />
     </div>
-  );
+  )
 }

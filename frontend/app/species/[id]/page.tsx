@@ -1,45 +1,33 @@
-import { Navigation } from "@/components/navigation";
-import { Footer } from "@/components/footer";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import Link from "next/link";
-import {
-  ArrowLeft,
-  MapPin,
-  Ruler,
-  Weight,
-  Calendar,
-  Eye,
-  Heart,
-  Share2,
-} from "lucide-react";
+import { Navigation } from "@/components/navigation"
+import { Footer } from "@/components/footer"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import Link from "next/link"
+import { ArrowLeft, MapPin, Ruler, Weight, Calendar, Eye, Heart, Share2 } from "lucide-react"
 
 // Mock data - in a real app this would come from a database
-const speciesData: Record<
-  string,
-  {
-    id: number;
-    name: string;
-    scientificName: string;
-    status: string;
-    habitat: string;
-    category: string;
-    image: string;
-    gallery: string[];
-    description: string;
-    size: string;
-    weight: string;
-    lifespan: string;
-    diet: string;
-    distribution: string;
-    threats: string[];
-    conservation: string[];
-    funFacts: string[];
-    observations: number;
-  }
-> = {
+const speciesData: Record<string, {
+  id: number
+  name: string
+  scientificName: string
+  status: string
+  habitat: string
+  category: string
+  image: string
+  gallery: string[]
+  description: string
+  size: string
+  weight: string
+  lifespan: string
+  diet: string
+  distribution: string
+  threats: string[]
+  conservation: string[]
+  funFacts: string[]
+  observations: number
+}> = {
   "1": {
     id: 1,
     name: "Blue Whale",
@@ -47,15 +35,13 @@ const speciesData: Record<
     status: "Endangered",
     habitat: "Open Ocean",
     category: "Mammals",
-    image:
-      "https://images.unsplash.com/photo-1568430462989-44163eb1752f?w=800&h=600&fit=crop",
+    image: "https://images.unsplash.com/photo-1568430462989-44163eb1752f?w=800&h=600&fit=crop",
     gallery: [
       "https://images.unsplash.com/photo-1568430462989-44163eb1752f?w=400&h=300&fit=crop",
       "https://images.unsplash.com/photo-1544552866-d3ed42536cfd?w=400&h=300&fit=crop",
       "https://images.unsplash.com/photo-1607153333879-c174d265f1d2?w=400&h=300&fit=crop",
     ],
-    description:
-      "The blue whale is the largest animal known to have ever existed on Earth. These magnificent marine mammals rule the oceans at up to 100 feet long and upwards of 200 tons. Their tongues alone can weigh as much as an elephant, and their hearts as much as an automobile.",
+    description: "The blue whale is the largest animal known to have ever existed on Earth. These magnificent marine mammals rule the oceans at up to 100 feet long and upwards of 200 tons. Their tongues alone can weigh as much as an elephant, and their hearts as much as an automobile.",
     size: "Up to 100 feet (30 meters)",
     weight: "Up to 200 tons (181 metric tons)",
     lifespan: "80-90 years",
@@ -81,15 +67,15 @@ const speciesData: Record<
     ],
     observations: 1247,
   },
-};
+}
 
 const statusColors: Record<string, string> = {
   "Critically Endangered": "bg-destructive text-destructive-foreground",
-  Endangered: "bg-orange-500 text-white",
-  Vulnerable: "bg-yellow-500 text-black",
+  "Endangered": "bg-orange-500 text-white",
+  "Vulnerable": "bg-yellow-500 text-black",
   "Near Threatened": "bg-amber-400 text-black",
   "Least Concern": "bg-green-500 text-white",
-};
+}
 
 // Default species data for IDs not in our mock database
 const defaultSpecies = {
@@ -99,13 +85,11 @@ const defaultSpecies = {
   status: "Least Concern",
   habitat: "Ocean",
   category: "Fish",
-  image:
-    "https://images.unsplash.com/photo-1535591273668-578e31182c4f?w=800&h=600&fit=crop",
+  image: "https://images.unsplash.com/photo-1535591273668-578e31182c4f?w=800&h=600&fit=crop",
   gallery: [
     "https://images.unsplash.com/photo-1535591273668-578e31182c4f?w=400&h=300&fit=crop",
   ],
-  description:
-    "This species information is being compiled. Check back soon for detailed information about this fascinating marine creature.",
+  description: "This species information is being compiled. Check back soon for detailed information about this fascinating marine creature.",
   size: "Varies",
   weight: "Varies",
   lifespan: "Varies",
@@ -115,15 +99,11 @@ const defaultSpecies = {
   conservation: ["Marine protected areas", "Sustainable fishing practices"],
   funFacts: ["Marine biodiversity is essential for healthy ocean ecosystems"],
   observations: 0,
-};
+}
 
-export default async function SpeciesDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  const species = speciesData[id] || { ...defaultSpecies, id: parseInt(id) };
+export default async function SpeciesDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const species = speciesData[id] || { ...defaultSpecies, id: parseInt(id) }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -138,12 +118,8 @@ export default async function SpeciesDetailPage({
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
           <div className="absolute inset-0 flex items-end">
-            <div className="w-full mx-auto px-4 md:px-6 pb-8">
-              <Button
-                variant="ghost"
-                className="mb-4 text-white hover:text-white hover:bg-white/20"
-                asChild
-              >
+            <div className="container px-4 md:px-6 pb-8">
+              <Button variant="ghost" className="mb-4 text-white hover:text-white hover:bg-white/20" asChild>
                 <Link href="/species">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Species
@@ -151,17 +127,13 @@ export default async function SpeciesDetailPage({
               </Button>
               <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
                 <div>
-                  <Badge
-                    className={`mb-2 ${statusColors[species.status] || "bg-muted text-muted-foreground"}`}
-                  >
+                  <Badge className={`mb-2 ${statusColors[species.status] || "bg-muted text-muted-foreground"}`}>
                     {species.status}
                   </Badge>
                   <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
                     {species.name}
                   </h1>
-                  <p className="text-xl text-gray-300 italic mt-1">
-                    {species.scientificName}
-                  </p>
+                  <p className="text-xl text-gray-300 italic mt-1">{species.scientificName}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button variant="secondary" size="sm">
@@ -180,7 +152,7 @@ export default async function SpeciesDetailPage({
 
         {/* Content */}
         <section className="py-12">
-          <div className="w-full mx-auto px-4 md:px-6">
+          <div className="container px-4 md:px-6">
             <div className="grid lg:grid-cols-3 gap-8">
               {/* Main Content */}
               <div className="lg:col-span-2 space-y-8">
@@ -189,17 +161,13 @@ export default async function SpeciesDetailPage({
                     <CardTitle>About</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-muted-foreground leading-relaxed">
-                      {species.description}
-                    </p>
+                    <p className="text-muted-foreground leading-relaxed">{species.description}</p>
                   </CardContent>
                 </Card>
 
                 <Tabs defaultValue="characteristics" className="w-full">
                   <TabsList className="grid w-full grid-cols-3">
-                    <TabsTrigger value="characteristics">
-                      Characteristics
-                    </TabsTrigger>
+                    <TabsTrigger value="characteristics">Characteristics</TabsTrigger>
                     <TabsTrigger value="conservation">Conservation</TabsTrigger>
                     <TabsTrigger value="facts">Fun Facts</TabsTrigger>
                   </TabsList>
@@ -212,9 +180,7 @@ export default async function SpeciesDetailPage({
                               <Ruler className="h-5 w-5 text-primary" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">
-                                Size
-                              </p>
+                              <p className="text-sm text-muted-foreground">Size</p>
                               <p className="font-medium">{species.size}</p>
                             </div>
                           </div>
@@ -223,9 +189,7 @@ export default async function SpeciesDetailPage({
                               <Weight className="h-5 w-5 text-primary" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">
-                                Weight
-                              </p>
+                              <p className="text-sm text-muted-foreground">Weight</p>
                               <p className="font-medium">{species.weight}</p>
                             </div>
                           </div>
@@ -234,9 +198,7 @@ export default async function SpeciesDetailPage({
                               <Calendar className="h-5 w-5 text-primary" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">
-                                Lifespan
-                              </p>
+                              <p className="text-sm text-muted-foreground">Lifespan</p>
                               <p className="font-medium">{species.lifespan}</p>
                             </div>
                           </div>
@@ -245,20 +207,14 @@ export default async function SpeciesDetailPage({
                               <MapPin className="h-5 w-5 text-primary" />
                             </div>
                             <div>
-                              <p className="text-sm text-muted-foreground">
-                                Distribution
-                              </p>
-                              <p className="font-medium">
-                                {species.distribution}
-                              </p>
+                              <p className="text-sm text-muted-foreground">Distribution</p>
+                              <p className="font-medium">{species.distribution}</p>
                             </div>
                           </div>
                         </div>
                         <div className="mt-6 pt-6 border-t">
                           <h4 className="font-medium mb-2">Diet</h4>
-                          <p className="text-muted-foreground">
-                            {species.diet}
-                          </p>
+                          <p className="text-muted-foreground">{species.diet}</p>
                         </div>
                       </CardContent>
                     </Card>
@@ -270,10 +226,7 @@ export default async function SpeciesDetailPage({
                           <h4 className="font-medium mb-3">Threats</h4>
                           <ul className="space-y-2">
                             {species.threats.map((threat, index) => (
-                              <li
-                                key={index}
-                                className="flex items-start gap-2 text-muted-foreground"
-                              >
+                              <li key={index} className="flex items-start gap-2 text-muted-foreground">
                                 <span className="h-1.5 w-1.5 rounded-full bg-destructive mt-2 flex-shrink-0" />
                                 {threat}
                               </li>
@@ -281,15 +234,10 @@ export default async function SpeciesDetailPage({
                           </ul>
                         </div>
                         <div>
-                          <h4 className="font-medium mb-3">
-                            Conservation Efforts
-                          </h4>
+                          <h4 className="font-medium mb-3">Conservation Efforts</h4>
                           <ul className="space-y-2">
                             {species.conservation.map((effort, index) => (
-                              <li
-                                key={index}
-                                className="flex items-start gap-2 text-muted-foreground"
-                              >
+                              <li key={index} className="flex items-start gap-2 text-muted-foreground">
                                 <span className="h-1.5 w-1.5 rounded-full bg-green-500 mt-2 flex-shrink-0" />
                                 {effort}
                               </li>
@@ -325,10 +273,7 @@ export default async function SpeciesDetailPage({
                   <CardContent>
                     <div className="grid grid-cols-3 gap-4">
                       {species.gallery.map((img, index) => (
-                        <div
-                          key={index}
-                          className="aspect-square rounded-lg overflow-hidden"
-                        >
+                        <div key={index} className="aspect-square rounded-lg overflow-hidden">
                           <img
                             src={img}
                             alt={`${species.name} ${index + 1}`}
@@ -349,39 +294,24 @@ export default async function SpeciesDetailPage({
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-muted-foreground">
-                        Category
-                      </span>
+                      <span className="text-sm text-muted-foreground">Category</span>
                       <Badge variant="outline">{species.category}</Badge>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-muted-foreground">
-                        Habitat
-                      </span>
+                      <span className="text-sm text-muted-foreground">Habitat</span>
                       <Badge variant="outline">{species.habitat}</Badge>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-muted-foreground">
-                        Status
-                      </span>
-                      <Badge
-                        className={
-                          statusColors[species.status] ||
-                          "bg-muted text-muted-foreground"
-                        }
-                      >
+                      <span className="text-sm text-muted-foreground">Status</span>
+                      <Badge className={statusColors[species.status] || "bg-muted text-muted-foreground"}>
                         {species.status}
                       </Badge>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-muted-foreground">
-                        Observations
-                      </span>
+                      <span className="text-sm text-muted-foreground">Observations</span>
                       <div className="flex items-center gap-1">
                         <Eye className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">
-                          {species.observations.toLocaleString()}
-                        </span>
+                        <span className="font-medium">{species.observations.toLocaleString()}</span>
                       </div>
                     </div>
                   </CardContent>
@@ -396,9 +326,7 @@ export default async function SpeciesDetailPage({
                       <Link href="/observations/new">Submit Observation</Link>
                     </Button>
                     <Button variant="outline" className="w-full" asChild>
-                      <Link href={`/map?species=${species.id}`}>
-                        View on Map
-                      </Link>
+                      <Link href={`/map?species=${species.id}`}>View on Map</Link>
                     </Button>
                   </CardContent>
                 </Card>
@@ -425,5 +353,5 @@ export default async function SpeciesDetailPage({
       </main>
       <Footer />
     </div>
-  );
+  )
 }
