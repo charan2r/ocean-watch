@@ -1,9 +1,10 @@
-
-
 # Environment variables
+.env
 .env*.local
 
 # Common ignores
 node_modules
 .next/
 .DS_Store
+src/database/migrations
+dist

@@ -57,6 +57,12 @@ const learnItems = [
     description: "Real-world conservation initiatives and how to contribute.",
     icon: TreePine,
   },
+  {
+    title: "GIS Map",
+    href: "/map",
+    description: "Report pollution incidents and contribute to conservation.",
+    icon: Map,
+  }
 ]
 
 const contributeItems = [
