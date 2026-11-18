@@ -1,0 +1,1073 @@
+-- =========================================================================
+-- Ocean Watch - Team 27 (EER6689)
+-- PostgreSQL schema v4
+-- =========================================================================
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TYPE user_role AS ENUM ('ADMIN', 'CITIZEN');
+CREATE TYPE pipeline_type AS ENUM ('A', 'B');
+CREATE TYPE processing_status AS ENUM ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED');
+CREATE TYPE decision_status AS ENUM ('MODEL_CONFIRMED', 'NOT_CONFIRMED', 'BORDERLINE');
+CREATE TYPE human_verification_status AS ENUM ('HAWKSBILL_PRESENT', 'HAWKSBILL_NOT_PRESENT', 'UNCERTAIN');
+CREATE TYPE publication_status AS ENUM ('DRAFT', 'PUBLISHED', 'WITHDRAWN');
+CREATE TYPE activity_tag AS ENUM ('SWIMMING', 'FEEDING', 'RESTING', 'NESTING_RELATED', 'UNKNOWN');
+CREATE TYPE concern_tag AS ENUM (
+    'ENTANGLEMENT', 'INJURY', 'FISHING_GEAR', 'PLASTIC_DEBRIS',
+    'BOAT_INTERACTION', 'HUMAN_DISTURBANCE', 'NO_CONCERN', 'UNCERTAIN'
+);
+CREATE TYPE question_stage AS ENUM ('PRE', 'POST');
+CREATE TYPE observation_status AS ENUM ('DRAFT', 'SUBMITTED', 'ARCHIVED');
+CREATE TYPE feedback_verdict AS ENUM ('CORRECT', 'INCORRECT', 'UNSURE');
+CREATE TYPE feedback_review_status AS ENUM ('PENDING', 'ACCEPTED', 'REJECTED', 'UNCERTAIN');
+CREATE TYPE gating_aggregation_method AS ENUM ('CONSECUTIVE', 'ROLLING_AVERAGE', 'COUNT_WITHIN_WINDOW');
+CREATE TYPE retained_data_type AS ENUM (
+    'REJECTED_VIDEO', 'CONFIRMED_VIDEO', 'DETECTIONS', 'LOCATION',
+    'AWARENESS_RESPONSE', 'CLASSIFICATION_IMAGE', 'GRADCAM_IMAGE',
+    'REPRESENTATIVE_FRAME', 'ASSISTANT_INTERACTION',
+    'JOURNAL_OBSERVATION', 'JOURNAL_PHOTO', 'PREDICTION_FEEDBACK',
+    'LEARNING_ATTEMPT'
+);
+CREATE TYPE knowledge_source AS ENUM ('SPECIES', 'CLASS_CONTENT', 'LEARN_SECTION');
+CREATE TYPE assistant_guardrail AS ENUM (
+    'ALLOWED', 'REFUSED_OFF_TOPIC', 'REFUSED_LOCATION',
+    'REFUSED_VERIFICATION', 'REFUSED_NO_CONTEXT', 'REFUSED_INPUT'
+);
+
+-- =========================================================================
+-- 1. USERS
+-- =========================================================================
+CREATE TABLE users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email           VARCHAR(255) NOT NULL UNIQUE,
+    password_hash   VARCHAR(255) NOT NULL,
+    role            user_role NOT NULL DEFAULT 'CITIZEN',
+    display_name    VARCHAR(100),
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =========================================================================
+-- 2. MODEL VERSIONS
+-- Pipeline A = image classification; Pipeline B = uploaded-video detection.
+-- =========================================================================
+CREATE TABLE model_versions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pipeline        pipeline_type NOT NULL,
+    model_name      VARCHAR(100) NOT NULL,
+    version_tag     VARCHAR(50) NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT false,
+    metrics         JSONB,
+    trained_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (pipeline, model_name, version_tag)
+);
+
+CREATE UNIQUE INDEX uq_model_versions_one_active_per_pipeline
+    ON model_versions (pipeline) WHERE is_active = true;
+
+-- =========================================================================
+-- 3. GATING SETTINGS
+-- Config fields are locked once referenced by a video session. is_active can
+-- still be flipped to select the current rule; create a new row for new rules.
+-- =========================================================================
+CREATE TABLE gating_settings (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    model_version_id            UUID NOT NULL REFERENCES model_versions(id) ON DELETE RESTRICT,
+    confidence_threshold        NUMERIC(5,4) NOT NULL,
+    temporal_window_ms          INTEGER NOT NULL,
+    minimum_detection_count     INTEGER,
+    aggregation_method          gating_aggregation_method NOT NULL DEFAULT 'CONSECUTIVE',
+    frame_sampling_fps          NUMERIC(6,2),
+    is_active                   BOOLEAN NOT NULL DEFAULT false,
+    notes                       TEXT,
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_gating_confidence CHECK (confidence_threshold BETWEEN 0 AND 1),
+    CONSTRAINT chk_gating_window CHECK (temporal_window_ms > 0),
+    CONSTRAINT chk_gating_min_count CHECK (
+        minimum_detection_count IS NULL OR minimum_detection_count >= 1
+    ),
+    CONSTRAINT chk_gating_required_count CHECK (
+        aggregation_method = 'ROLLING_AVERAGE'
+        OR minimum_detection_count IS NOT NULL
+    ),
+    CONSTRAINT chk_gating_fps CHECK (frame_sampling_fps IS NULL OR frame_sampling_fps > 0)
+);
+
+CREATE UNIQUE INDEX uq_gating_one_active_per_model
+    ON gating_settings (model_version_id) WHERE is_active = true;
+
+-- =========================================================================
+-- 4. MARINE CLASSES
+-- =========================================================================
+CREATE TABLE marine_classes (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code            VARCHAR(30) NOT NULL UNIQUE,
+    name_en         VARCHAR(100) NOT NULL,
+    name_si         VARCHAR(100) NOT NULL,
+    name_ta         VARCHAR(100) NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =========================================================================
+-- 5. CONSERVATION CONTENT
+-- =========================================================================
+CREATE TABLE conservation_content (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    marine_class_id         UUID NOT NULL UNIQUE REFERENCES marine_classes(id) ON DELETE RESTRICT,
+    content_en              TEXT NOT NULL,
+    content_si              TEXT NOT NULL,
+    content_ta              TEXT NOT NULL,
+    recommended_actions_en  TEXT,
+    recommended_actions_si  TEXT,
+    recommended_actions_ta  TEXT,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =========================================================================
+-- 6. CLASSIFICATION RESULTS
+-- =========================================================================
+CREATE TABLE classification_results (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                 UUID REFERENCES users(id) ON DELETE CASCADE,
+    anon_token_hash         CHAR(64),
+    model_version_id        UUID NOT NULL REFERENCES model_versions(id) ON DELETE RESTRICT,
+    image_path              VARCHAR(500) NOT NULL,
+    image_sha256            CHAR(64),
+    predicted_class_id      UUID NOT NULL REFERENCES marine_classes(id) ON DELETE RESTRICT,
+    confidence              NUMERIC(5,4) NOT NULL,
+    class_scores            JSONB,
+    gradcam_path            VARCHAR(500),
+    inference_latency_ms    INTEGER,
+    media_purged_at         TIMESTAMPTZ,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_classification_result_id_class UNIQUE (id, predicted_class_id),
+    CONSTRAINT chk_classification_identity CHECK (
+        (user_id IS NOT NULL AND anon_token_hash IS NULL)
+        OR (user_id IS NULL AND anon_token_hash IS NOT NULL)
+    ),
+    CONSTRAINT chk_classification_anon_token CHECK (
+        anon_token_hash IS NULL OR anon_token_hash ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT chk_classification_confidence CHECK (confidence BETWEEN 0 AND 1),
+    CONSTRAINT chk_classification_latency CHECK (
+        inference_latency_ms IS NULL OR inference_latency_ms >= 0
+    ),
+    CONSTRAINT chk_classification_hash CHECK (
+        image_sha256 IS NULL OR image_sha256 ~ '^[0-9a-fA-F]{64}$'
+    )
+);
+
+CREATE INDEX idx_classification_results_user_created
+    ON classification_results (user_id, created_at DESC);
+CREATE INDEX idx_classification_results_class
+    ON classification_results (predicted_class_id);
+CREATE INDEX idx_classification_results_image_hash
+    ON classification_results (image_sha256) WHERE image_sha256 IS NOT NULL;
+CREATE INDEX idx_classification_results_anon_token
+    ON classification_results (anon_token_hash) WHERE anon_token_hash IS NOT NULL;
+
+-- =========================================================================
+-- 7. AWARENESS QUESTIONS
+-- =========================================================================
+CREATE TABLE awareness_questions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pair_key        VARCHAR(80) NOT NULL,
+    stage           question_stage NOT NULL,
+    question_en     TEXT NOT NULL,
+    question_si     TEXT NOT NULL,
+    question_ta     TEXT NOT NULL,
+    options         JSONB,
+    scoring_key     JSONB,
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (pair_key, stage)
+);
+
+-- =========================================================================
+-- 8. AWARENESS RESPONSES
+-- =========================================================================
+-- Only authenticated users may save awareness answers. The application creates one
+-- assessment_session_id per participant's PRE/POST cycle and reuses it for both stages.
+CREATE TABLE awareness_responses (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    assessment_session_id   UUID NOT NULL,
+    user_id                 UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    question_id             UUID NOT NULL REFERENCES awareness_questions(id) ON DELETE RESTRICT,
+    response_value          JSONB NOT NULL,
+    is_correct              BOOLEAN,
+    submitted_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (assessment_session_id, question_id)
+);
+
+CREATE INDEX idx_awareness_responses_user_session
+    ON awareness_responses (user_id, assessment_session_id, submitted_at DESC);
+
+-- Prevent a client from reusing one assessment-session UUID across different users.
+CREATE OR REPLACE FUNCTION fn_validate_awareness_session_owner()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM awareness_responses ar
+        WHERE ar.assessment_session_id = NEW.assessment_session_id
+          AND ar.user_id <> NEW.user_id
+          AND ar.id <> NEW.id
+    ) THEN
+        RAISE EXCEPTION 'An awareness assessment session can belong to only one user';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_awareness_session_owner
+    BEFORE INSERT OR UPDATE ON awareness_responses
+    FOR EACH ROW EXECUTE FUNCTION fn_validate_awareness_session_owner();
+
+-- =========================================================================
+-- 9. VIDEO SESSIONS
+-- Uploaded videos only. Completed sessions must record the gate result and
+-- the exact gating setting used.
+-- =========================================================================
+CREATE TABLE video_sessions (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID REFERENCES users(id) ON DELETE SET NULL,
+    source_type                 VARCHAR(30) NOT NULL DEFAULT 'UPLOADED_VIDEO',
+    original_filename           VARCHAR(255),
+    file_path                   VARCHAR(500),
+    file_size_bytes             BIGINT,
+    duration_seconds            NUMERIC(10,2),
+    media_sha256                CHAR(64),
+    media_purged_at             TIMESTAMPTZ,
+    model_version_id            UUID NOT NULL REFERENCES model_versions(id) ON DELETE RESTRICT,
+    gating_setting_id           UUID REFERENCES gating_settings(id) ON DELETE RESTRICT,
+    tracker_name                VARCHAR(50) NOT NULL DEFAULT 'BoT-SORT',
+    tracker_version             VARCHAR(50),
+    processing_status           processing_status NOT NULL DEFAULT 'PENDING',
+    gate_decision               decision_status,
+    failure_reason              TEXT,
+    estimated_distinct_tracks   INTEGER,
+    decision_confidence         NUMERIC(5,4),
+    representative_frame_path   VARCHAR(500),
+    processing_duration_ms      INTEGER,
+    achieved_fps                NUMERIC(7,2),
+    started_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ended_at                    TIMESTAMPTZ,
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_video_source CHECK (source_type = 'UPLOADED_VIDEO'),
+    CONSTRAINT chk_video_file_size CHECK (file_size_bytes IS NULL OR file_size_bytes >= 0),
+    CONSTRAINT chk_video_duration CHECK (duration_seconds IS NULL OR duration_seconds >= 0),
+    CONSTRAINT chk_video_track_count CHECK (
+        estimated_distinct_tracks IS NULL OR estimated_distinct_tracks >= 0
+    ),
+    CONSTRAINT chk_video_decision_confidence CHECK (
+        decision_confidence IS NULL OR decision_confidence BETWEEN 0 AND 1
+    ),
+    CONSTRAINT chk_video_processing_duration CHECK (
+        processing_duration_ms IS NULL OR processing_duration_ms >= 0
+    ),
+    CONSTRAINT chk_video_fps CHECK (achieved_fps IS NULL OR achieved_fps >= 0),
+    CONSTRAINT chk_video_end_time CHECK (ended_at IS NULL OR ended_at >= started_at),
+    CONSTRAINT chk_video_media_hash CHECK (
+        media_sha256 IS NULL OR media_sha256 ~ '^[0-9a-fA-F]{64}$'
+    ),
+    CONSTRAINT chk_video_gate_requires_completed CHECK (
+        gate_decision IS NULL OR processing_status = 'COMPLETED'
+    ),
+    CONSTRAINT chk_video_completed_requires_gate CHECK (
+        processing_status <> 'COMPLETED'
+        OR (gate_decision IS NOT NULL AND gating_setting_id IS NOT NULL)
+    ),
+    CONSTRAINT chk_video_failure_reason CHECK (
+        failure_reason IS NULL OR processing_status = 'FAILED'
+    )
+);
+
+CREATE INDEX idx_video_sessions_user_created
+    ON video_sessions (user_id, created_at DESC);
+CREATE INDEX idx_video_sessions_processing_status
+    ON video_sessions (processing_status);
+CREATE INDEX idx_video_sessions_gate_decision
+    ON video_sessions (gate_decision) WHERE gate_decision IS NOT NULL;
+CREATE INDEX idx_video_sessions_media_hash
+    ON video_sessions (media_sha256) WHERE media_sha256 IS NOT NULL;
+
+-- =========================================================================
+-- 10. TRACKS
+-- =========================================================================
+CREATE TABLE tracks (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    video_session_id    UUID NOT NULL REFERENCES video_sessions(id) ON DELETE CASCADE,
+    local_track_id      INTEGER NOT NULL,
+    first_timestamp_ms  INTEGER NOT NULL,
+    last_timestamp_ms   INTEGER NOT NULL,
+    duration_ms         INTEGER,
+    avg_confidence      NUMERIC(5,4),
+    max_confidence      NUMERIC(5,4),
+    UNIQUE (video_session_id, local_track_id),
+    UNIQUE (id, video_session_id),
+    CONSTRAINT chk_track_local_id CHECK (local_track_id >= 0),
+    CONSTRAINT chk_track_timestamps CHECK (
+        first_timestamp_ms >= 0 AND last_timestamp_ms >= first_timestamp_ms
+    ),
+    CONSTRAINT chk_track_duration CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    CONSTRAINT chk_track_avg_confidence CHECK (
+        avg_confidence IS NULL OR avg_confidence BETWEEN 0 AND 1
+    ),
+    CONSTRAINT chk_track_max_confidence CHECK (
+        max_confidence IS NULL OR max_confidence BETWEEN 0 AND 1
+    )
+);
+
+CREATE INDEX idx_tracks_session ON tracks (video_session_id);
+
+-- =========================================================================
+-- 11. DETECTIONS
+-- YOLO-native normalized center coordinates (cx, cy, width, height).
+-- =========================================================================
+CREATE TABLE detections (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    video_session_id    UUID NOT NULL REFERENCES video_sessions(id) ON DELETE CASCADE,
+    track_id            UUID,
+    frame_number        INTEGER NOT NULL,
+    timestamp_ms        INTEGER NOT NULL,
+    bbox_cx             NUMERIC(7,6) NOT NULL,
+    bbox_cy             NUMERIC(7,6) NOT NULL,
+    bbox_w              NUMERIC(7,6) NOT NULL,
+    bbox_h              NUMERIC(7,6) NOT NULL,
+    confidence          NUMERIC(5,4) NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT fk_detections_track_session
+        FOREIGN KEY (track_id, video_session_id)
+        REFERENCES tracks (id, video_session_id) ON DELETE CASCADE,
+    CONSTRAINT chk_detection_frame CHECK (frame_number >= 0 AND timestamp_ms >= 0),
+    CONSTRAINT chk_detection_bbox_size CHECK (
+        bbox_w > 0 AND bbox_w <= 1 AND bbox_h > 0 AND bbox_h <= 1
+    ),
+    CONSTRAINT chk_detection_bbox_center CHECK (
+        bbox_cx BETWEEN 0 AND 1 AND bbox_cy BETWEEN 0 AND 1
+    ),
+    CONSTRAINT chk_detection_bbox_containment CHECK (
+        bbox_cx - bbox_w / 2 >= 0 AND bbox_cx + bbox_w / 2 <= 1
+        AND bbox_cy - bbox_h / 2 >= 0 AND bbox_cy + bbox_h / 2 <= 1
+    ),
+    CONSTRAINT chk_detection_confidence CHECK (confidence BETWEEN 0 AND 1)
+);
+
+CREATE INDEX idx_detections_session_frame ON detections (video_session_id, frame_number);
+CREATE INDEX idx_detections_track ON detections (track_id) WHERE track_id IS NOT NULL;
+
+-- =========================================================================
+-- 12. SPOT CHECKS (evaluation only; does not alter operational gate status)
+-- =========================================================================
+CREATE TABLE spot_checks (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    video_session_id        UUID NOT NULL UNIQUE REFERENCES video_sessions(id) ON DELETE RESTRICT,
+    checked_by_user_id      UUID REFERENCES users(id) ON DELETE SET NULL,
+    automated_decision      decision_status NOT NULL,
+    human_verification      human_verification_status NOT NULL,
+    notes                   TEXT,
+    sampled_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    checked_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =========================================================================
+-- 13. SIGHTINGS
+-- Only MODEL_CONFIRMED video sessions may be published. Generalized locations
+-- only; no exact wildlife coordinates should be collected for public display.
+-- =========================================================================
+CREATE TABLE sightings (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    video_session_id        UUID NOT NULL UNIQUE REFERENCES video_sessions(id) ON DELETE RESTRICT,
+    user_id                 UUID REFERENCES users(id) ON DELETE SET NULL,
+    generalized_lat         NUMERIC(8,5),
+    generalized_lng         NUMERIC(8,5),
+    location_region_label   VARCHAR(150),
+    observed_at             TIMESTAMPTZ,
+    activity                activity_tag,
+    concerns                concern_tag[] NOT NULL DEFAULT '{}',
+    consent_given_at        TIMESTAMPTZ,
+    consent_version         VARCHAR(30),
+    publication_status      publication_status NOT NULL DEFAULT 'DRAFT',
+    withdrawn_at            TIMESTAMPTZ,
+    withdrawn_by_user_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+    withdrawal_reason       TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_sighting_coordinates_pair CHECK (
+        (generalized_lat IS NULL AND generalized_lng IS NULL)
+        OR (generalized_lat IS NOT NULL AND generalized_lng IS NOT NULL)
+    ),
+    CONSTRAINT chk_sighting_latitude CHECK (
+        generalized_lat IS NULL OR generalized_lat BETWEEN -90 AND 90
+    ),
+    CONSTRAINT chk_sighting_longitude CHECK (
+        generalized_lng IS NULL OR generalized_lng BETWEEN -180 AND 180
+    ),
+    CONSTRAINT chk_published_sighting_requirements CHECK (
+        publication_status <> 'PUBLISHED'
+        OR (generalized_lat IS NOT NULL AND generalized_lng IS NOT NULL
+            AND observed_at IS NOT NULL AND consent_given_at IS NOT NULL
+            AND consent_version IS NOT NULL)
+    ),
+    CONSTRAINT chk_withdrawn_metadata CHECK (
+        publication_status <> 'WITHDRAWN' OR withdrawn_at IS NOT NULL
+    )
+);
+
+CREATE INDEX idx_sightings_public_map ON sightings (observed_at DESC)
+    WHERE publication_status = 'PUBLISHED';
+CREATE INDEX idx_sightings_region ON sightings (location_region_label)
+    WHERE publication_status = 'PUBLISHED';
+CREATE INDEX idx_sightings_user_created ON sightings (user_id, created_at DESC);
+
+-- =========================================================================
+-- 14. RETENTION POLICIES
+-- =========================================================================
+CREATE TABLE retention_policies (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    data_type       retained_data_type NOT NULL UNIQUE,
+    store_data      BOOLEAN NOT NULL DEFAULT true,
+    retention_days  INTEGER,
+    description     TEXT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_retention_days CHECK (retention_days IS NULL OR retention_days >= 0),
+    CONSTRAINT chk_retention_semantics CHECK (store_data OR retention_days IS NULL)
+);
+
+-- =========================================================================
+-- 15. MARINE SPECIES (curated educational gallery)
+-- =========================================================================
+CREATE TABLE marine_species (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug                    VARCHAR(160) NOT NULL UNIQUE,
+    common_name_en          VARCHAR(160) NOT NULL,
+    common_name_si          VARCHAR(160) NOT NULL,
+    common_name_ta          VARCHAR(160) NOT NULL,
+    scientific_name         VARCHAR(200),
+    marine_class_id         UUID REFERENCES marine_classes(id) ON DELETE SET NULL,
+    description_en          TEXT NOT NULL,
+    description_si          TEXT NOT NULL,
+    description_ta          TEXT NOT NULL,
+    habitat_en              TEXT,
+    habitat_si              TEXT,
+    habitat_ta              TEXT,
+    distribution_en         TEXT,
+    distribution_si         TEXT,
+    distribution_ta         TEXT,
+    threats_en              TEXT,
+    threats_si              TEXT,
+    threats_ta              TEXT,
+    facts                   JSONB,
+    conservation_status     VARCHAR(80),
+    is_sri_lankan            BOOLEAN NOT NULL DEFAULT false,
+    is_featured              BOOLEAN NOT NULL DEFAULT false,
+    is_active                BOOLEAN NOT NULL DEFAULT true,
+    image_path               VARCHAR(500),
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_marine_species_active_group ON marine_species (marine_class_id, common_name_en)
+    WHERE is_active = true;
+CREATE INDEX idx_marine_species_sri_lankan ON marine_species (common_name_en)
+    WHERE is_active = true AND is_sri_lankan = true;
+CREATE INDEX idx_marine_species_featured ON marine_species (common_name_en)
+    WHERE is_active = true AND is_featured = true;
+
+-- =========================================================================
+-- 16. LEARN ARTICLES
+-- =========================================================================
+CREATE TABLE learn_articles (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug        VARCHAR(160) NOT NULL UNIQUE,
+    title_en    VARCHAR(200) NOT NULL,
+    title_si    VARCHAR(200) NOT NULL,
+    title_ta    VARCHAR(200) NOT NULL,
+    body_en     TEXT NOT NULL,
+    body_si     TEXT NOT NULL,
+    body_ta     TEXT NOT NULL,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    is_active   BOOLEAN NOT NULL DEFAULT true,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =========================================================================
+-- 17. KNOWLEDGE CHUNKS
+-- CLASS_CONTENT source_id is marine_classes.id. SPECIES and LEARN_SECTION
+-- source_id values are their respective table IDs. Polymorphic IDs cannot
+-- have a conventional foreign key; lifecycle triggers/jobs maintain them.
+-- =========================================================================
+CREATE TABLE knowledge_chunks (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_type       knowledge_source NOT NULL,
+    source_id         UUID NOT NULL,
+    chunk_key         VARCHAR(40) NOT NULL,
+    lang              CHAR(2) NOT NULL,
+    chunk_text        TEXT NOT NULL,
+    embedding         vector(768),
+    embedding_model   VARCHAR(80),
+    task_type         VARCHAR(30),
+    is_active         BOOLEAN NOT NULL DEFAULT true,
+    embedded_at       TIMESTAMPTZ,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_knowledge_chunk_lang CHECK (lang IN ('EN', 'SI', 'TA')),
+    CONSTRAINT uq_knowledge_chunk_identity UNIQUE (source_type, source_id, lang, chunk_key)
+);
+
+CREATE INDEX idx_knowledge_chunks_active ON knowledge_chunks (source_type, lang)
+    WHERE is_active = true;
+
+-- =========================================================================
+-- 18. ASSISTANT INTERACTIONS
+-- =========================================================================
+CREATE TABLE assistant_interactions (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id               UUID REFERENCES users(id) ON DELETE SET NULL,
+    query_lang            CHAR(2) NOT NULL,
+    query_text            TEXT NOT NULL,
+    guardrail_decision    assistant_guardrail NOT NULL DEFAULT 'ALLOWED',
+    retrieved_chunk_ids   UUID[],
+    top_similarity        NUMERIC(5,4),
+    answer_text           TEXT,
+    gemini_model          VARCHAR(80),
+    prompt_version        VARCHAR(30),
+    latency_ms            INTEGER,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_assistant_query_lang CHECK (query_lang IN ('EN', 'SI', 'TA')),
+    CONSTRAINT chk_assistant_similarity_range CHECK (
+        top_similarity IS NULL OR top_similarity BETWEEN -1 AND 1
+    ),
+    CONSTRAINT chk_assistant_latency CHECK (latency_ms IS NULL OR latency_ms >= 0)
+);
+
+CREATE INDEX idx_assistant_interactions_created ON assistant_interactions (created_at DESC);
+CREATE INDEX idx_assistant_interactions_guardrail ON assistant_interactions (guardrail_decision);
+
+-- =========================================================================
+-- 19. MARINE OBSERVATIONS
+-- Citizen journal / offline-capable reports. Never publish these as AI-confirmed
+-- sightings. client_submission_id is generated client-side and supports retries.
+-- =========================================================================
+CREATE TABLE marine_observations (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_submission_id  UUID NOT NULL UNIQUE,
+    user_id               UUID REFERENCES users(id) ON DELETE CASCADE,
+    owner_token_hash      CHAR(64),
+    status                observation_status NOT NULL DEFAULT 'DRAFT',
+    observed_at           TIMESTAMPTZ,
+    category_id           UUID REFERENCES marine_classes(id) ON DELETE RESTRICT,
+    user_species_label    VARCHAR(200),
+    habitat_code          VARCHAR(30),
+    region_label          VARCHAR(150),
+    generalized_lat       NUMERIC(6,3),
+    generalized_lng       NUMERIC(6,3),
+    description           TEXT,
+    photo_path            VARCHAR(500),
+    media_purged_at       TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    submitted_at          TIMESTAMPTZ,
+    CONSTRAINT chk_observation_has_owner CHECK (
+        user_id IS NOT NULL OR owner_token_hash IS NOT NULL
+    ),
+    CONSTRAINT chk_observation_token_format CHECK (
+        owner_token_hash IS NULL OR owner_token_hash ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT chk_observation_coordinates_pair CHECK (
+        (generalized_lat IS NULL AND generalized_lng IS NULL)
+        OR (generalized_lat IS NOT NULL AND generalized_lng IS NOT NULL)
+    ),
+    CONSTRAINT chk_observation_latitude CHECK (
+        generalized_lat IS NULL OR generalized_lat BETWEEN -90 AND 90
+    ),
+    CONSTRAINT chk_observation_longitude CHECK (
+        generalized_lng IS NULL OR generalized_lng BETWEEN -180 AND 180
+    ),
+    CONSTRAINT chk_observation_description_length CHECK (
+        description IS NULL OR char_length(description) <= 2000
+    ),
+    CONSTRAINT chk_observation_submitted_requirements CHECK (
+        status <> 'SUBMITTED' OR (submitted_at IS NOT NULL AND observed_at IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_marine_observations_user ON marine_observations (user_id, created_at DESC)
+    WHERE user_id IS NOT NULL;
+CREATE INDEX idx_marine_observations_token ON marine_observations (owner_token_hash)
+    WHERE owner_token_hash IS NOT NULL;
+
+-- =========================================================================
+-- 20. PREDICTION FEEDBACK
+-- Original model output is immutable; feedback proposes a correction for review.
+-- =========================================================================
+CREATE TABLE prediction_feedback (
+    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    classification_result_id  UUID NOT NULL,
+    predicted_class_id        UUID NOT NULL,
+    user_id                   UUID REFERENCES users(id) ON DELETE CASCADE,
+    anon_token_hash           CHAR(64),
+    verdict                   feedback_verdict NOT NULL,
+    proposed_class_id         UUID REFERENCES marine_classes(id) ON DELETE RESTRICT,
+    comment                   TEXT,
+    review_status             feedback_review_status NOT NULL DEFAULT 'PENDING',
+    reviewer_user_id          UUID REFERENCES users(id) ON DELETE RESTRICT,
+    review_note               TEXT,
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at               TIMESTAMPTZ,
+    CONSTRAINT fk_feedback_result_class
+        FOREIGN KEY (classification_result_id, predicted_class_id)
+        REFERENCES classification_results (id, predicted_class_id) ON DELETE CASCADE,
+    CONSTRAINT chk_feedback_identity CHECK (
+        (user_id IS NOT NULL AND anon_token_hash IS NULL)
+        OR (user_id IS NULL AND anon_token_hash IS NOT NULL)
+    ),
+    CONSTRAINT chk_feedback_incorrect_needs_distinct_class CHECK (
+        verdict <> 'INCORRECT'
+        OR (proposed_class_id IS NOT NULL AND proposed_class_id <> predicted_class_id)
+    ),
+    CONSTRAINT chk_feedback_proposed_only_when_incorrect CHECK (
+        verdict = 'INCORRECT' OR proposed_class_id IS NULL
+    ),
+    CONSTRAINT chk_feedback_review_consistency CHECK (
+        (review_status = 'PENDING') = (reviewed_at IS NULL)
+    ),
+    CONSTRAINT chk_feedback_review_has_reviewer CHECK (
+        review_status = 'PENDING' OR reviewer_user_id IS NOT NULL
+    ),
+    CONSTRAINT chk_feedback_token_format CHECK (
+        anon_token_hash IS NULL OR anon_token_hash ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT chk_feedback_comment_length CHECK (
+        comment IS NULL OR char_length(comment) <= 1000
+    ),
+    CONSTRAINT chk_feedback_note_length CHECK (
+        review_note IS NULL OR char_length(review_note) <= 1000
+    )
+);
+
+CREATE UNIQUE INDEX uq_feedback_one_per_user
+    ON prediction_feedback (classification_result_id, user_id) WHERE user_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_feedback_one_per_anon
+    ON prediction_feedback (classification_result_id, anon_token_hash)
+    WHERE anon_token_hash IS NOT NULL;
+CREATE INDEX idx_prediction_feedback_result ON prediction_feedback (classification_result_id);
+CREATE INDEX idx_prediction_feedback_review_queue ON prediction_feedback (created_at)
+    WHERE verdict = 'INCORRECT' AND review_status = 'PENDING';
+
+-- =========================================================================
+-- 21. USER PROFILES
+-- =========================================================================
+CREATE TABLE user_profiles (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    nickname            VARCHAR(30) NOT NULL,
+    avatar_key          VARCHAR(30) NOT NULL,
+    show_on_leaderboard BOOLEAN NOT NULL DEFAULT false,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_profile_nickname CHECK (char_length(trim(nickname)) BETWEEN 2 AND 30),
+    CONSTRAINT chk_profile_avatar CHECK (
+        avatar_key IN ('coral', 'turtle', 'dolphin', 'whale', 'seahorse', 'octopus', 'fish')
+    )
+);
+
+CREATE UNIQUE INDEX uq_user_profiles_nickname_ci ON user_profiles (lower(nickname));
+
+-- =========================================================================
+-- 22. LEARNING ATTEMPTS
+-- Scores are nullable to support unscored branching stories. If scores are
+-- used, the server calculates them and must ensure score <= max_score.
+-- =========================================================================
+CREATE TABLE learning_attempts (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scenario_id         VARCHAR(80) NOT NULL,
+    attempt_number      SMALLINT NOT NULL DEFAULT 1,
+    score               SMALLINT,
+    max_score           SMALLINT,
+    completion_time_ms  INTEGER,
+    choices_path        JSONB NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_learning_attempt_number CHECK (attempt_number >= 1),
+    CONSTRAINT chk_learning_scenario_id CHECK (scenario_id IN (
+        'BLEACHED_REEF', 'TANGLED_HATCHLING', 'NESTING_BEACH', 'REEF_WALK', 'FISHING_NET'
+    )),
+    CONSTRAINT chk_learning_score_pair CHECK (
+        (score IS NULL AND max_score IS NULL)
+        OR (score IS NOT NULL AND max_score IS NOT NULL
+            AND max_score > 0 AND score >= 0 AND score <= max_score)
+    ),
+    CONSTRAINT chk_learning_completion_time CHECK (
+        completion_time_ms IS NULL OR completion_time_ms >= 0
+    ),
+    CONSTRAINT uq_learning_attempt UNIQUE (user_id, scenario_id, attempt_number)
+);
+
+CREATE INDEX idx_learning_attempts_user ON learning_attempts (user_id, scenario_id, attempt_number);
+CREATE INDEX idx_learning_attempts_scenario ON learning_attempts (scenario_id, score DESC);
+
+-- =========================================================================
+-- INTEGRITY TRIGGERS
+-- =========================================================================
+
+-- Model-to-pipeline matching is validated by the backend application.
+-- classification_results must use Pipeline A; video_sessions and gating_settings must use Pipeline B.
+
+-- A completed session must use a gating setting belonging to its model.
+CREATE OR REPLACE FUNCTION fn_validate_video_gating_setting()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    v_gating_model_id UUID;
+BEGIN
+    IF NEW.gating_setting_id IS NOT NULL THEN
+        SELECT model_version_id INTO v_gating_model_id
+        FROM gating_settings WHERE id = NEW.gating_setting_id;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Gating setting % does not exist', NEW.gating_setting_id;
+        END IF;
+
+        IF v_gating_model_id <> NEW.model_version_id THEN
+            RAISE EXCEPTION 'Gating setting model must match video session model';
+        END IF;
+    END IF;
+
+    IF NEW.processing_status = 'COMPLETED' AND NEW.gating_setting_id IS NULL THEN
+        RAISE EXCEPTION 'Completed video sessions require a gating setting';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_video_gating_setting_consistency
+    BEFORE INSERT OR UPDATE
+    ON video_sessions
+    FOR EACH ROW EXECUTE FUNCTION fn_validate_video_gating_setting();
+
+-- Do not mutate the identity/version fields of a model version after it is used.
+CREATE OR REPLACE FUNCTION fn_lock_used_model_version()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.pipeline IS DISTINCT FROM OLD.pipeline
+        OR NEW.model_name IS DISTINCT FROM OLD.model_name
+        OR NEW.version_tag IS DISTINCT FROM OLD.version_tag)
+       AND (
+          EXISTS (SELECT 1 FROM classification_results WHERE model_version_id = OLD.id)
+          OR EXISTS (SELECT 1 FROM video_sessions WHERE model_version_id = OLD.id)
+          OR EXISTS (SELECT 1 FROM gating_settings WHERE model_version_id = OLD.id)
+       )
+    THEN
+        RAISE EXCEPTION 'Cannot change pipeline/name/version tag of a model version that is already referenced';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_lock_used_model_version
+    BEFORE UPDATE ON model_versions
+    FOR EACH ROW EXECUTE FUNCTION fn_lock_used_model_version();
+
+-- Lock gating configuration fields after a session references the row.
+-- is_active can change so a new setting can become active.
+CREATE OR REPLACE FUNCTION fn_lock_used_gating_settings()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM video_sessions WHERE gating_setting_id = OLD.id)
+       AND (
+          NEW.model_version_id IS DISTINCT FROM OLD.model_version_id
+          OR NEW.confidence_threshold IS DISTINCT FROM OLD.confidence_threshold
+          OR NEW.temporal_window_ms IS DISTINCT FROM OLD.temporal_window_ms
+          OR NEW.minimum_detection_count IS DISTINCT FROM OLD.minimum_detection_count
+          OR NEW.aggregation_method IS DISTINCT FROM OLD.aggregation_method
+          OR NEW.frame_sampling_fps IS DISTINCT FROM OLD.frame_sampling_fps
+          OR NEW.notes IS DISTINCT FROM OLD.notes
+       )
+    THEN
+        RAISE EXCEPTION 'Cannot change configuration of gating setting % after it has been used; insert a new row', OLD.id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_lock_used_gating_settings
+    BEFORE UPDATE ON gating_settings
+    FOR EACH ROW EXECUTE FUNCTION fn_lock_used_gating_settings();
+
+-- Published sightings require complete metadata and a confirmed session.
+-- Locking the session row prevents a concurrent gate-decision change race.
+CREATE OR REPLACE FUNCTION fn_enforce_sighting_publish_rule()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    v_gate_decision decision_status;
+BEGIN
+    IF NEW.publication_status = 'PUBLISHED' THEN
+        SELECT gate_decision INTO v_gate_decision
+        FROM video_sessions
+        WHERE id = NEW.video_session_id
+        FOR UPDATE;
+
+        IF NOT FOUND OR v_gate_decision IS DISTINCT FROM 'MODEL_CONFIRMED' THEN
+            RAISE EXCEPTION
+                'Sighting % cannot be published unless its video session is MODEL_CONFIRMED',
+                NEW.id;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_sightings_publish_rule
+    BEFORE INSERT OR UPDATE ON sightings
+    FOR EACH ROW EXECUTE FUNCTION fn_enforce_sighting_publish_rule();
+
+-- Once a published sighting relies on a decision/configuration, do not mutate
+-- the decision or model/gating references. Withdraw the sighting to retract it.
+CREATE OR REPLACE FUNCTION fn_lock_published_session_decision()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM sightings
+        WHERE video_session_id = OLD.id AND publication_status = 'PUBLISHED'
+    ) THEN
+        IF NEW.gate_decision IS DISTINCT FROM OLD.gate_decision
+           OR NEW.model_version_id IS DISTINCT FROM OLD.model_version_id
+           OR NEW.gating_setting_id IS DISTINCT FROM OLD.gating_setting_id
+        THEN
+            RAISE EXCEPTION
+                'Cannot change gate decision or model/gating configuration while a published sighting depends on session %; withdraw the sighting first',
+                OLD.id;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_video_sessions_lock_published_decision
+    BEFORE UPDATE ON video_sessions
+    FOR EACH ROW EXECUTE FUNCTION fn_lock_published_session_decision();
+
+-- Prediction feedback must be tied to the owner of the classification result.
+CREATE OR REPLACE FUNCTION fn_validate_prediction_feedback_owner()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    v_result_user_id UUID;
+    v_result_anon_token_hash CHAR(64);
+BEGIN
+    SELECT user_id, anon_token_hash
+      INTO v_result_user_id, v_result_anon_token_hash
+    FROM classification_results
+    WHERE id = NEW.classification_result_id
+      AND predicted_class_id = NEW.predicted_class_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Classification result and predicted class do not match';
+    END IF;
+
+    IF NEW.user_id IS NOT NULL THEN
+        IF v_result_user_id IS DISTINCT FROM NEW.user_id
+           OR v_result_anon_token_hash IS NOT NULL THEN
+            RAISE EXCEPTION 'Feedback user must own the classification result';
+        END IF;
+    ELSE
+        IF v_result_user_id IS NOT NULL
+           OR v_result_anon_token_hash IS DISTINCT FROM NEW.anon_token_hash THEN
+            RAISE EXCEPTION 'Anonymous feedback token must match the classification result owner token';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_prediction_feedback_owner
+    BEFORE INSERT OR UPDATE
+    ON prediction_feedback
+    FOR EACH ROW EXECUTE FUNCTION fn_validate_prediction_feedback_owner();
+
+-- Only admins may review feedback. A non-pending review requires a reviewer.
+CREATE OR REPLACE FUNCTION fn_validate_feedback_reviewer()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    v_role user_role;
+BEGIN
+    IF NEW.review_status <> 'PENDING' THEN
+        IF NEW.reviewer_user_id IS NULL THEN
+            RAISE EXCEPTION 'A reviewed feedback item requires reviewer_user_id';
+        END IF;
+
+        SELECT role INTO v_role FROM users WHERE id = NEW.reviewer_user_id;
+        IF NOT FOUND OR v_role <> 'ADMIN' THEN
+            RAISE EXCEPTION 'Only an ADMIN may review prediction feedback';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_prediction_feedback_reviewer
+    BEFORE INSERT OR UPDATE
+    ON prediction_feedback
+    FOR EACH ROW EXECUTE FUNCTION fn_validate_feedback_reviewer();
+
+-- =========================================================================
+-- RAG SOURCE INVALIDATION 
+-- On source edits/deletes, deactivate stale chunks. The application/admin must
+-- regenerate embeddings and reactivate fresh chunks after curated content changes.
+-- =========================================================================
+
+CREATE OR REPLACE FUNCTION fn_species_embedding_change()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        UPDATE knowledge_chunks
+        SET is_active = false, updated_at = now()
+        WHERE source_type = 'SPECIES' AND source_id = OLD.id;
+        RETURN OLD;
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.is_active IS DISTINCT FROM OLD.is_active
+           OR NEW.common_name_en IS DISTINCT FROM OLD.common_name_en
+           OR NEW.common_name_si IS DISTINCT FROM OLD.common_name_si
+           OR NEW.common_name_ta IS DISTINCT FROM OLD.common_name_ta
+           OR NEW.scientific_name IS DISTINCT FROM OLD.scientific_name
+           OR NEW.marine_class_id IS DISTINCT FROM OLD.marine_class_id
+           OR NEW.description_en IS DISTINCT FROM OLD.description_en
+           OR NEW.description_si IS DISTINCT FROM OLD.description_si
+           OR NEW.description_ta IS DISTINCT FROM OLD.description_ta
+           OR NEW.habitat_en IS DISTINCT FROM OLD.habitat_en
+           OR NEW.habitat_si IS DISTINCT FROM OLD.habitat_si
+           OR NEW.habitat_ta IS DISTINCT FROM OLD.habitat_ta
+           OR NEW.distribution_en IS DISTINCT FROM OLD.distribution_en
+           OR NEW.distribution_si IS DISTINCT FROM OLD.distribution_si
+           OR NEW.distribution_ta IS DISTINCT FROM OLD.distribution_ta
+           OR NEW.threats_en IS DISTINCT FROM OLD.threats_en
+           OR NEW.threats_si IS DISTINCT FROM OLD.threats_si
+           OR NEW.threats_ta IS DISTINCT FROM OLD.threats_ta
+           OR NEW.facts IS DISTINCT FROM OLD.facts
+           OR NEW.conservation_status IS DISTINCT FROM OLD.conservation_status
+           OR NEW.is_sri_lankan IS DISTINCT FROM OLD.is_sri_lankan
+        THEN
+            UPDATE knowledge_chunks
+            SET is_active = false, updated_at = now()
+            WHERE source_type = 'SPECIES' AND source_id = NEW.id;
+        END IF;
+        RETURN NEW;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_marine_species_embedding_change
+    AFTER UPDATE OR DELETE ON marine_species
+    FOR EACH ROW EXECUTE FUNCTION fn_species_embedding_change();
+
+CREATE OR REPLACE FUNCTION fn_learn_article_embedding_change()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        UPDATE knowledge_chunks
+        SET is_active = false, updated_at = now()
+        WHERE source_type = 'LEARN_SECTION' AND source_id = OLD.id;
+        RETURN OLD;
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.is_active IS DISTINCT FROM OLD.is_active
+           OR NEW.title_en IS DISTINCT FROM OLD.title_en
+           OR NEW.title_si IS DISTINCT FROM OLD.title_si
+           OR NEW.title_ta IS DISTINCT FROM OLD.title_ta
+           OR NEW.body_en IS DISTINCT FROM OLD.body_en
+           OR NEW.body_si IS DISTINCT FROM OLD.body_si
+           OR NEW.body_ta IS DISTINCT FROM OLD.body_ta
+        THEN
+            UPDATE knowledge_chunks
+            SET is_active = false, updated_at = now()
+            WHERE source_type = 'LEARN_SECTION' AND source_id = NEW.id;
+        END IF;
+        RETURN NEW;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_learn_articles_embedding_change
+    AFTER UPDATE OR DELETE ON learn_articles
+    FOR EACH ROW EXECUTE FUNCTION fn_learn_article_embedding_change();
+
+CREATE OR REPLACE FUNCTION fn_conservation_content_embedding_change()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        UPDATE knowledge_chunks
+        SET is_active = false, updated_at = now()
+        WHERE source_type = 'CLASS_CONTENT' AND source_id = OLD.marine_class_id;
+        RETURN OLD;
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.marine_class_id IS DISTINCT FROM OLD.marine_class_id
+           OR NEW.content_en IS DISTINCT FROM OLD.content_en
+           OR NEW.content_si IS DISTINCT FROM OLD.content_si
+           OR NEW.content_ta IS DISTINCT FROM OLD.content_ta
+           OR NEW.recommended_actions_en IS DISTINCT FROM OLD.recommended_actions_en
+           OR NEW.recommended_actions_si IS DISTINCT FROM OLD.recommended_actions_si
+           OR NEW.recommended_actions_ta IS DISTINCT FROM OLD.recommended_actions_ta
+        THEN
+            UPDATE knowledge_chunks
+            SET is_active = false, updated_at = now()
+            WHERE source_type = 'CLASS_CONTENT'
+              AND source_id IN (OLD.marine_class_id, NEW.marine_class_id);
+        END IF;
+        RETURN NEW;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_conservation_content_embedding_change
+    AFTER UPDATE OR DELETE ON conservation_content
+    FOR EACH ROW EXECUTE FUNCTION fn_conservation_content_embedding_change();
+
+-- =========================================================================
+-- SEED DATA
+-- =========================================================================
+
+INSERT INTO marine_classes (code, name_en, name_si, name_ta) VALUES
+    ('FISH',           'Fish',               'මාළු',                         'மீன்கள்'),
+    ('CORAL',          'Coral',              'කොරල්',                       'பவளம்'),
+    ('INVERTEBRATE',   'Other Invertebrate', 'අනෙකුත් අපෘෂ්ඨවංශීන්',        'பிற முதுகெலும்பில்லா உயிரினங்கள்'),
+    ('MARINE_FLORA',   'Marine Flora',       'සමුද්‍ර ශාක',                 'கடல் தாவரங்கள்'),
+    ('MARINE_REPTILE', 'Marine Reptile',     'සමුද්‍ර උරගයන්',               'கடல் ஊர்வன');
+
+INSERT INTO retention_policies (data_type, store_data, retention_days, description) VALUES
+    ('REJECTED_VIDEO', true, 7,
+     'Raw not-confirmed uploaded video; purge after the short evaluation window while retaining session summary.'),
+    ('CONFIRMED_VIDEO', true, 30,
+     'Raw confirmed video is temporary; retain summary metadata and representative evidence separately.'),
+    ('DETECTIONS', true, 7,
+     'Transient per-frame detections are pruned after debugging/evaluation.'),
+    ('LOCATION', true, NULL,
+     'Retain generalized public location only; do not store exact wildlife coordinates in public sightings.'),
+    ('AWARENESS_RESPONSE', true, NULL,
+     'Retain responses for aggregate project evaluation; apply access controls and avoid unnecessary identifiers.'),
+    ('CLASSIFICATION_IMAGE', true, NULL,
+     'Retain uploaded images for user history until user deletion or a revised retention policy applies.'),
+    ('GRADCAM_IMAGE', true, NULL,
+     'Retain Grad-CAM overlays alongside classification history until deletion or policy revision.'),
+    ('REPRESENTATIVE_FRAME', true, NULL,
+     'Retain representative evidence for a published/confirmed session, subject to takedown and privacy rules.'),
+    ('ASSISTANT_INTERACTION', true, 30,
+     'Keep assistant logs briefly for debugging/evaluation; avoid storing personal or precise location information.'),
+    ('JOURNAL_OBSERVATION', true, NULL,
+     'Retain citizen journal entries as user history until user deletion or a revised retention policy applies.'),
+    ('JOURNAL_PHOTO', true, 365,
+     'Review and purge journal photos after one year unless a shorter policy or user deletion applies.'),
+    ('PREDICTION_FEEDBACK', true, 365,
+     'Retain feedback for review and evaluation for one year.'),
+    ('LEARNING_ATTEMPT', true, 365,
+     'Retain scenario completion and choice-path records for one year, subject to user deletion and project policy.');
+
+-- =========================================================================
+-- END OF SCHEMA
+-- =========================================================================
